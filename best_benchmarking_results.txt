@@ -1,0 +1,193 @@
+╔════════════════════════╗
+║  WALDE Benchmark Suite ║
+╚════════════════════════╝
+
+── Benchmark 1: Pure Zipfian baseline ──
+  Post-warmup L1 hit rate: 70.3%
+
+╔═══ zipfian
+║  Throughput:     1617392 ops/sec
+║  Duration:       0.124 sec
+║  L1 hit rate:    75.3%
+║  L2 hit rate:    8.6% (given L1 miss)
+║  Admissions:     9523
+║  Rejections:     39896
+║  Evictions:      9523
+║
+║  ── End-to-end latency ──
+║  Total  p50=0.30  p95=1.20  p99=2.40  p999=4.80 μs
+║
+║  ── Per-path latency (p50 μs) ──
+║  L1 hit:      0.300  (142986 ops)
+║  L2 hit:      1.200  (4057 ops)
+║  Backend hit: 1.200  (42905 ops)
+║
+║  ── Component breakdown (p50 μs) ──
+║  Lock wait:  0.050
+║  Lookup:     0.050
+║  Admission:  0.050  (2457 events)
+║  Eviction:   0.150  (454 events)
+║  Slab alloc: 0.050
+║  L2 access:  0.150
+║  Backend:    0.300
+╚═══
+
+── Benchmark 2: Scan resistance ──
+  Post-warmup L1 hit rate: 70.3%
+
+╔═══ zipfian+scan
+║  Throughput:     1573410 ops/sec
+║  Duration:       0.127 sec
+║  L1 hit rate:    66.6%
+║  L2 hit rate:    5.5% (given L1 miss)
+║  Admissions:     8611
+║  Rejections:     35444
+║  Evictions:      8611
+║
+║  ── End-to-end latency ──
+║  Total  p50=0.30  p95=1.20  p99=2.40  p999=9.60 μs
+║
+║  ── Per-path latency (p50 μs) ──
+║  L1 hit:      0.300  (127415 ops)
+║  L2 hit:      1.200  (3521 ops)
+║  Backend hit: 1.200  (38350 ops)
+║
+║  ── Component breakdown (p50 μs) ──
+║  Lock wait:  0.050
+║  Lookup:     0.050
+║  Admission:  0.050  (2184 events)
+║  Eviction:   0.150  (413 events)
+║  Slab alloc: 0.050
+║  L2 access:  0.150
+║  Backend:    0.300
+╚═══
+
+─── Latency Model (corrected: per-path conditional) ───
+  h₁=0.666  t₁=0.300μs (L1 hit p50, 127415 samples)
+  h₂=0.055  t₂=1.200μs (L2 hit p50, 3521 samples)
+  tₘ=1.200μs (backend hit p50, 38350 samples)
+  Expected mean: 0.601 μs
+  Observed mean: 0.487 μs
+  Model error: 23.2%
+
+── Benchmark 3: Concurrency scaling ──
+
+╔═══ zipfian
+║  Throughput:     1581800 ops/sec
+║  Duration:       0.063 sec
+║  L1 hit rate:    72.5%
+║  L2 hit rate:    6.2% (given L1 miss)
+║  Admissions:     20919
+║  Rejections:     33919
+║  Evictions:      12919
+║
+║  ── End-to-end latency ──
+║  Total  p50=0.30  p95=1.20  p99=1.20  p999=4.80 μs
+║
+║  ── Per-path latency (p50 μs) ──
+║  L1 hit:      0.150  (70940 ops)
+║  L2 hit:      1.200  (2065 ops)
+║  Backend hit: 1.200  (22002 ops)
+║
+║  ── Component breakdown (p50 μs) ──
+║  Lock wait:  0.050
+║  Lookup:     0.050
+║  Admission:  0.050  (1265 events)
+║  Eviction:   0.150  (274 events)
+║  Slab alloc: 0.050
+║  L2 access:  0.150
+║  Backend:    0.300
+╚═══
+
+╔═══ zipfian
+║  Throughput:     2388023 ops/sec
+║  Duration:       0.084 sec
+║  L1 hit rate:    73.6%
+║  L2 hit rate:    7.0% (given L1 miss)
+║  Admissions:     24855
+║  Rejections:     54066
+║  Evictions:      16855
+║
+║  ── End-to-end latency ──
+║  Total  p50=0.30  p95=2.40  p99=2.40  p999=9.60 μs
+║
+║  ── Per-path latency (p50 μs) ──
+║  L1 hit:      0.300  (143119 ops)
+║  L2 hit:      1.200  (4067 ops)
+║  Backend hit: 1.200  (42828 ops)
+║
+║  ── Component breakdown (p50 μs) ──
+║  Lock wait:  0.050
+║  Lookup:     0.150
+║  Admission:  0.150  (2520 events)
+║  Eviction:   0.300  (504 events)
+║  Slab alloc: 0.050
+║  L2 access:  0.150
+║  Backend:    0.300
+╚═══
+
+╔═══ zipfian
+║  Throughput:     3757265 ops/sec
+║  Duration:       0.106 sec
+║  L1 hit rate:    74.6%
+║  L2 hit rate:    7.7% (given L1 miss)
+║  Admissions:     33161
+║  Rejections:     93619
+║  Evictions:      25161
+║
+║  ── End-to-end latency ──
+║  Total  p50=0.30  p95=2.40  p99=4.80  p999=9.60 μs
+║
+║  ── Per-path latency (p50 μs) ──
+║  L1 hit:      0.300  (287644 ops)
+║  L2 hit:      1.200  (8091 ops)
+║  Backend hit: 1.200  (84288 ops)
+║
+║  ── Component breakdown (p50 μs) ──
+║  Lock wait:  0.050
+║  Lookup:     0.150
+║  Admission:  0.150  (4895 events)
+║  Eviction:   0.300  (915 events)
+║  Slab alloc: 0.050
+║  L2 access:  0.150
+║  Backend:    0.300
+╚═══
+╔═══ zipfian
+║  Throughput:     4089993 ops/sec
+║  Duration:       0.196 sec
+║  L1 hit rate:    75.4%
+║  L2 hit rate:    8.3% (given L1 miss)
+║  Admissions:     49375
+║  Rejections:     171943
+║  Evictions:      41375
+║
+║  ── End-to-end latency ──
+║  Total  p50=0.60  p95=9.60  p99=19.20  p999=38.40 μs
+║
+║  ── Per-path latency (p50 μs) ──
+║  L1 hit:      0.600  (577713 ops)
+║  L2 hit:      2.400  (16244 ops)
+║  Backend hit: 2.400  (165813 ops)
+║
+║  ── Component breakdown (p50 μs) ──
+║  Lock wait:  0.050
+║  Lookup:     0.150
+║  Admission:  0.150  (9765 events)
+║  Eviction:   0.600  (1740 events)
+║  Slab alloc: 0.050
+║  L2 access:  0.150
+║  Backend:    0.600
+╚═══
+
+─── Scaling Summary ───
+  1 thread(s): 1581800 ops/sec (1.00x)
+  2 thread(s): 2388023 ops/sec (1.51x)
+  4 thread(s): 3757265 ops/sec (2.38x)
+  8 thread(s): 4089993 ops/sec (2.59x)
+
+── Benchmark 4: Timer overhead ──
+  steady_clock overhead: mean=18ns p50=18ns p99=20ns
+  Per-op measurement cost: ~36ns (2 clock reads)
+
+═══ Benchmark complete ═══
+
