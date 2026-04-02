@@ -141,7 +141,7 @@ Control flow annotated with decision points, latency sources, and contention bou
   Exclusive LRU eviction within L2 stripe
     |
     v
-  StorageBackend  — pluggable interface        [not implemented in current release]
+  StorageBackend  — pluggable interface        
 ```
 
 **Latency by stage:**
@@ -173,7 +173,7 @@ CMS decay (every 5×capacity operations per stripe) prevents historical frequenc
 
 ### 6.3 What WALDE does not solve
 
-WALDE does not protect against uniform high-cardinality access with no recurrence (see Section 7 for measured analysis). It does not eliminate tail latency from lock contention — at 8 threads, slab CAS contention measurably degrades throughput (Section 9.3). The async demotion path bounds steady-state queue depth but does not guarantee bounded demotion latency under sustained L1 eviction pressure. No disk or NVMe backend is implemented.
+WALDE does not protect against uniform high-cardinality access with no recurrence (see Section 7 for measured analysis). It does not eliminate tail latency from lock contention — at 8 threads, slab CAS contention measurably degrades throughput (Section 9.3). The async demotion path bounds steady-state queue depth but does not guarantee bounded demotion latency under sustained L1 eviction pressure.
 
 ---
 
@@ -280,7 +280,7 @@ The p99–p999 spread (10–16x over p50) reflects lock contention variance and 
 ```cpp
 LatencyBreakdown breakdown;
 auto result = cache.get("user:1001", &breakdown);
-// fields: lock_wait, lookup, admission, eviction, l2, backend, slab
+// fields: lock_wait, lookup, admission, eviction, l2, slab
 // all values in nanoseconds; unvisited stages are 0
 ```
 
@@ -291,7 +291,6 @@ auto result = cache.get("user:1001", &breakdown);
 | `admission` | CMS query + frequency comparison                   |
 | `eviction`  | Victim deallocation + DemotionQueue enqueue        |
 | `l2`        | L2 stripe lock + LRU probe                         |
-| `backend`   | StorageBackend interface call                      |
 | `slab`      | Free-list CAS + slot acquisition                   |
 
 When `admission` latency is anomalously high relative to `lookup`, it indicates CMS contention or a decay-cycle event. When `slab` dominates at high thread counts, it confirms the free-list bottleneck described in Section 9.3.
@@ -304,7 +303,7 @@ When `admission` latency is anomalously high relative to `lookup`, it indicates 
 |-------------------------|-------------------------------------------------------------------------------|-------------------------------------------------------------|---------------------------------|
 | Global slab free-list   | 8-thread throughput below 4-thread baseline; CAS contention confirmed        | Per-stripe memory arenas; eliminates cross-stripe allocation | Not implemented                 |
 | No Bloom doorkeeper     | CMS admits one-hit wonders; precision degrades under high-cardinality uniform workloads (Section 7) | Optional counting Bloom pre-filter as admission stage | Not implemented        |
-| In-memory only          | Benchmarks do not capture disk or NVMe latency                                | Disk / NVMe `StorageBackend` implementation                 | Interface exists, no implementation |
+| In-memory only          | Benchmarks do not capture disk or NVMe latency                                | Disk / NVMe `StorageBackend` implementation                 | Not implemented  |
 | Single-node             | No replication or distributed coordination                                    | Out of scope                                                | —                               |
 
 ---
