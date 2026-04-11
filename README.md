@@ -287,7 +287,7 @@ traces/       Sample traces + ARC S3 download script
 docs/         Architecture notes
 ```
 
-~7,000 lines of C++17. **Stack:** C++17 · XXHash64 · Count-Min Sketch · GoogleTest · CMake
+**Stack:** C++17 · XXHash64 · Count-Min Sketch · GoogleTest · CMake
 
 ---
 
@@ -295,7 +295,6 @@ docs/         Architecture notes
 
 - Einziger, G., Friedman, R., & Manes, B. (2017). TinyLFU: A highly efficient cache admission policy. *ACM Transactions on Storage*, 13(4).
 - Cormode, G., & Muthukrishnan, S. (2005). An improved data stream summary: the count-min sketch and its applications. *Journal of Algorithms*, 55(1), 58–75.
-- Megiddo, N., & Modha, D. S. (2003). ARC: A self-tuning, low overhead replacement cache. *USENIX FAST*.
 
 ## License
 
