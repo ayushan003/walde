@@ -2,39 +2,40 @@
 
 WALDE is a concurrent cache that replaces the Bloom doorkeeper from W-TinyLFU with CMS-only admission and measures the system-level consequences.
 
-+7.3pp hit rate vs LRU under scan workloads (68.0% vs 60.7%) and +5.5pp on ARC S3, at 2.9× lower single-thread throughput.
++8.8pp hit rate vs LRU under scan workloads (69.5% vs 60.7%) and +5.8pp on ARC S3, at ~2.8× lower single-thread throughput.
 
-Removing Bloom increases admission rate 3–4×, trading eviction churn for zero reset complexity and full per-decision observability.
+Removing Bloom increases admission rate 2–4×, trading eviction churn for zero reset complexity and full per-decision observability.
 
-All results are derived from identical operation sequences across policies, with warmup excluded via counter deltas.
+All results are derived from identical operation sequences across policies, with warmup excluded via counter deltas. YCSB results use cache=8192; ARC S3 uses `--cache-size 65536 --trace traces/s3_arc.txt`.
 
 ---
 
 ## Real-World Validation: ARC S3 Block I/O
 
-This is not a synthetic gain — WALDE is +5.5pp over LRU and +2.4pp over W-TinyLFU on production block I/O traces, with L2 contributing ~50% of total hits.
+WALDE is +5.8pp over LRU and +2.5pp over W-TinyLFU on production block I/O traces, with L2 contributing ~45% of total hits.
 
-> ARC paper (Megiddo & Modha, FAST 2003), S3 dataset. 16.4M total ops, 1.69M unique keys. Benchmarked at 2M ops (capped), cache=65,536 (~6.2% of working set).
+> ARC paper (Megiddo & Modha, FAST 2003), S3 dataset. 16.4M total ops, **1.062M unique keys** (verified from trace; earlier scripts over-counted). Benchmarked at 2M ops (capped), cache=65,536 (~6.2% of working set).
 
 | Policy | Hit Rate | Throughput | p50 | p99 |
 |---|---|---|---|---|
-| LRU | 1.5% | 3.77M/s | 0.30 μs | 0.60 μs |
-| W-TinyLFU | 4.6% | 2.90M/s | 0.30 μs | 0.60 μs |
-| **WALDE** | **7.0%** | 640K/s | 1.20 μs | 4.80 μs |
+| LRU | 1.5% | 3.67M/s | 0.30 μs | 0.60 μs |
+| W-TinyLFU | 4.8% | 2.86M/s | 0.30 μs | 0.60 μs |
+| **WALDE** | **7.3%** | 711K/s | 1.20 μs | 2.40 μs |
 
-WALDE detail: L1 hit=3.9%, L2 hit=3.3% (of L1 misses). 62,565 L2 hits vs 77,818 L1 hits — async demotion provides real rescue value on production access patterns.
+WALDE detail: L1 hit=4.0%, L2 hit=3.4% (of L1 misses). 62,551 L2 hits vs 76,767 L1 hits — async demotion provides real rescue value on production access patterns (L2 ≈ 45% of total hits).
 
-WALDE achieves this without a Bloom filter — matching W-TinyLFU's hit rate while making every admission decision individually attributable.
+WALDE achieves this without a Bloom filter — beating W-TinyLFU's hit rate while making every admission decision individually attributable.
 
 ```bash
-cd traces && bash download.sh && ./build/walde_comparison --trace traces/s3_arc.txt --cache-size 65536
+cd traces && bash download.sh && cd ..
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DWALDE_BUILD_COMPARISON=ON
+cmake --build build -j$(nproc)
+./build/walde_comparison --trace traces/s3_arc.txt --cache-size 65536
 ```
 
 ---
 
 ## Where WALDE Lacks
-
-WALDE is not a general-purpose replacement — it loses in the following regimes:
 
 | Scenario | Use Instead |
 |---|---|
@@ -42,7 +43,7 @@ WALDE is not a general-purpose replacement — it loses in the following regimes
 | Recency-biased workloads (YCSB-D, read-latest) | LRU |
 | One-hit-wonder rate >50% | W-TinyLFU |
 | Memory-constrained (WALDE: 2.2 MB vs LRU: 1.1 MB at 8K) | LRU or W-TinyLFU |
-| >4 threads, strict tail-latency requirements | StripedLRU (or WALDE with per-stripe arenas) |
+| Equal-capacity YCSB-B (12288 total) | W-TinyLFU (+0.2pp) |
 
 ---
 
@@ -50,29 +51,29 @@ WALDE is not a general-purpose replacement — it loses in the following regimes
 
 W-TinyLFU depends on a Bloom-filtered admission gate. WALDE removes it and measures what breaks and what improves.
 
-- **What happens if Bloom is removed?** Admission rate rises 3–4×; eviction churn and L2 pressure increase proportionally.
+- **What happens if Bloom is removed?** Admission rate rises 2–4× on skewed reads; eviction churn and L2 pressure increase proportionally.
 - **Is CMS alone sufficient for scan resistance?** Yes — hit-only increment ensures scan keys never accumulate frequency, making doorkeeper rejection redundant under skewed access.
-- **What breaks?** One-hit-wonder defense degrades to decay-only; shared slab allocator becomes a cross-stripe CAS bottleneck at ≥8 threads.
+- **What breaks?** One-hit-wonder defense degrades to decay-only; shared slab allocator becomes a cross-stripe CAS bottleneck at high thread counts.
 - **What improves?** Zero reset-schedule complexity; every admission decision is attributable at nanosecond resolution.
 
 ---
 
 ## Key Engineering Insights
 
-- **Removing the Bloom doorkeeper increases admission rate 3–4×** (WALDE: 7.9–12.7% vs W-TinyLFU: 2.8–3.7%), directly causing 2–3× higher eviction pressure and L2 traffic.
+- **Removing the Bloom doorkeeper increases admission rate 2–4× on skewed reads** (WALDE: 7.4–12.7% vs W-TinyLFU: 3.2% on YCSB-A/B/C), directly causing higher eviction pressure and L2 traffic. On YCSB-D the relationship inverts — W-TinyLFU admits 23.7% vs WALDE 15.4% — because the doorkeeper passes recency-fresh keys that hit-only CMS rejects.
 - **Hit-only CMS increment eliminates scan pollution without a pre-filter.** Scan keys that never reside in L1 have frequency ≈ 1 at admission time; Probation victims have frequency ≫ 1. The gate rejects scan keys without a Bloom stage.
 - **CMS width reduction 16× (8192 → 512 per stripe) produced zero hit-rate change** across all YCSB workloads. The original global sizing was a 16× memory over-allocation artifact.
-- **Shared slab allocator is the dominant bottleneck at ≥8 threads.** WALDE regresses from 2.51M → 1.29M/s (4T→8T); StripedLRU (no shared slab) sustains 4.41M/s at 8T. Confirmed directly via `LatencyBreakdown.slab`, not inferred from aggregate throughput.
-- **L2 rescue tier contributes ~50% of total hits on production traces.** ARC S3: L2 hit=3.3% vs L1 hit=3.9%. YCSB-B: L2 adds 1.6pp (8,009 hits / 500K ops).
-- **YCSB-D is a hard failure case, not a tuning gap.** At Window=1%, new keys cannot build CMS frequency fast enough for recency-biased access. WALDE: 67.1% vs LRU: 72.0%.
+- **Shared slab allocator regresses WALDE at high thread counts.** At cache=8192, WALDE drops 2.67M → 1.96M/s (4T→8T, −27%). The identification is comparative: StripedLRU — which differs primarily in lacking a shared slab — degrades far less (3.93M → 3.54M/s). At larger cache sizes (65536) where eviction is rarer, the slab bottleneck is less pronounced (WALDE 5.94M → 5.84M/s, −2%). `LatencyBreakdown.slab` is captured in single-threaded runs (p50 = 50 ns); multi-threaded slab instrumentation is future work.
+- **L2 rescue tier contributes ~45% of total hits on production traces.** ARC S3: 62,551 L2 hits vs 76,767 L1 hits. On YCSB (cache=8192), L2 contributes far less (~2% of total hits) — the rescue value is workload and cache-ratio dependent.
+- **YCSB-D is a hard failure case, not a tuning gap.** At Window=1%, new keys cannot build CMS frequency fast enough for recency-biased access. WALDE: 70.3% vs LRU: 72.0% (cache=8192).
 
 ---
 
 ## Positioning
 
 - **vs LRU:** frequency-based admission prevents scan-induced cache pollution; 64-stripe sharding eliminates single-mutex contention.
-- **vs W-TinyLFU:** removes Bloom filter → simpler admission model, full per-decision observability, higher churn. Same hit rate at equal capacity (YCSB-B: 77.8% vs 78.0%).
-- **vs StripedLRU:** better hit rate under skew (+1.6pp YCSB-B), worse throughput due to admission gate + shared allocator overhead.
+- **vs W-TinyLFU:** removes Bloom filter → simpler admission model, full per-decision observability, higher churn. Slightly worse at equal total capacity (YCSB-B @ 12288: 77.8% vs 78.0%).
+- **vs StripedLRU:** better hit rate under skew (+7.5pp YCSB-B at cache=8192), worse single-thread throughput due to admission gate + shared allocator overhead.
 
 ---
 
@@ -98,8 +99,7 @@ Critical path (measured): hash → stripe lock → L1 lookup → CMS admission �
   |                                                          |
   |  Window (1%)  →  overflow: eviction candidate ready      |
   |    v                                                     |
-  |  CMS.query(candidate) vs CMS.query(victim)  [DECISION: admission]
-  |  [~5–15 ns, per-stripe sketch, width=512]                |
+  |  CMS.query(candidate) vs CMS.query(victim)  [DECISION]   |
   |    |-- f(c) > f(v): candidate → Probation                |
   |    |-- f(c) ≤ f(v): candidate → DemotionQueue            |
   |                                                          |
@@ -107,7 +107,7 @@ Critical path (measured): hash → stripe lock → L1 lookup → CMS admission �
   |  Protected  (80%) — overflow → demote to Probation tail  |
   |                                                          |
   |  SlabAllocator — shared across all 64 stripes [CONTENTION POINT B]
-  |  [atomic CAS free-list; confirmed bottleneck at 8T]      |
+  |  [atomic CAS free-list; bottleneck at small-cache + high threads]
   +----------------------------------------------------------+
     |
     |  eviction → DemotionQueue (2048 slots)   [get() never blocks]
@@ -121,16 +121,18 @@ Critical path (measured): hash → stripe lock → L1 lookup → CMS admission �
   Exclusive LRU eviction within L2 stripe
 ```
 
-**Stage latency (single thread, YCSB-B):**
+**Stage latency (single thread, YCSB-B, cache=8192, p50):**
 
-| Stage       | Typical cost                    | Notes                                      |
-|-------------|---------------------------------|--------------------------------------------|
-| `lock_wait` | 0–500 ns                        | Near-zero at 1–2T; scales with stripe load |
-| `lookup`    | 50–200 ns                       | Hash map probe + LRU pointer update        |
-| `admission` | 5–15 ns                         | Two CMS reads + one comparison             |
-| `eviction`  | 10–50 ns                        | Slab dealloc + DemotionQueue enqueue       |
-| `l2`        | 200–600 ns                      | Separate stripe lock + hash probe          |
-| `slab`      | 10–30 ns (1–4T); degrades at 8T | Atomic free-list CAS; confirmed bottleneck |
+| Stage       | Typical cost               | Notes                                              |
+|-------------|----------------------------|----------------------------------------------------|
+| `lock_wait` | 50 ns                      | Near-zero at 1–2T; scales with stripe load         |
+| `lookup`    | 150 ns                     | Hash map probe + LRU pointer update                |
+| `admission` | 150 ns                     | Two CMS reads + one comparison                     |
+| `eviction`  | 300 ns                     | Slab dealloc + DemotionQueue enqueue               |
+| `l2`        | 150 ns                     | Separate stripe lock + hash probe                  |
+| `slab`      | 50 ns (single-thread)      | Atomic free-list CAS; instrumented via single-thread runs |
+
+> `backend_ns` is also captured by `LatencyBreakdown` but excluded from this table (storage path, not cache path).
 
 ---
 
@@ -138,7 +140,7 @@ Critical path (measured): hash → stripe lock → L1 lookup → CMS admission �
 
 ### 64 stripes
 
-Power-of-two above typical server core counts (8–32); 128 items per stripe at 8,192 total — large enough for meaningful three-segment LRU state. At 256 stripes, protected-segment overflow increases demotion churn. Results reflect default configuration.
+Power-of-two above typical server core counts (8–32); 128 items per stripe at 8,192 total — large enough for meaningful three-segment LRU state.
 
 ### CMS increment on hit only
 
@@ -146,84 +148,91 @@ Scan keys that miss L1 never accumulate frequency. On `put()`, they compete agai
 
 ### Async L1→L2 demotion
 
-Evicted items enqueue to a bounded `DemotionQueue` (2048 slots); background `DemotionDrainer` pops batches of 64 into L2. The `get()` path never blocks on L2 insertion. At queue >80% capacity, items are dropped — degradation via lost rescue opportunities, not stalls. Eviction p50 = 0.30 μs includes slab dealloc + enqueue, not L2 insertion.
+Evicted items enqueue to a bounded `DemotionQueue` (2048 slots); background `DemotionDrainer` pops batches of 64 into L2. The `get()` path never blocks on L2 insertion. At queue >80% capacity, items are dropped — degradation via lost rescue opportunities, not stalls.
 
 ### Shared slab allocator
 
-Single `SlabAllocator` backed by lock-free tagged-CAS free-list. Cross-stripe CAS contention limits scaling: 4T→8T regression (2.51M → 1.29M/s) confirmed via `LatencyBreakdown.slab`. Fix not implemented: per-stripe memory arenas with thread-local bump allocators.
+Single `SlabAllocator` backed by tagged-CAS free-list (ABA-prevention via 32-bit tag). Cross-stripe CAS contention is cache-ratio dependent: at 8.2% fill (cache=8192, 100K keys), WALDE regresses 4T→8T by −27%; at 65.5% fill (cache=65536), regression at the same step is only −2%. Fix not implemented: per-stripe memory arenas with thread-local bump allocators.
 
 ### Window=1%, Probation=20%, Protected=80%
 
-Ratios inherited from Caffeine/W-TinyLFU reference. Not tuned against WALDE's hit-only CMS policy — YCSB-D result (67.1% vs LRU 72.0%) reflects this directly.
+Ratios inherited from Caffeine/W-TinyLFU reference. Not tuned against WALDE's hit-only CMS policy.
 
 ---
 
 ## Performance
 
-> Intel Core i7-1360P · 16 GiB RAM · Ubuntu 24.04 · GCC 13.3 `-O2 -DNDEBUG` · L1=8,192, L2=4,096, working set=100K keys, Zipfian α=0.99, 500K ops, 100K warmup, 3 runs. Identical pre-generated operation sequences across all policies; per/post counter deltas exclude warmup.
+> Intel Core i7-1360P · 16 GiB RAM · Ubuntu 24.04 · GCC 13.3 `-O2 -DNDEBUG`
 
-### Hit Rate
+### Hit Rate — YCSB (cache=8192, working set=100K, Zipf α=0.99, 500K ops, 100K warmup, 3 runs)
 
-WALDE matches or exceeds W-TinyLFU on skewed workloads but fails on recency-biased access (YCSB-D: −4.9pp vs LRU).
-
-| Workload | LRU (8192) | W-TinyLFU (8192) | WALDE L1-only (8192) | WALDE L1+L2 (12288) |
+| Workload | LRU (8192) | W-TinyLFU (8192) | WALDE L1-only | WALDE Overall (L1+L2) |
 |---|---|---|---|---|
 | YCSB-A (50r/50w) | 70.2% | 75.0% | 75.8% | 77.9% |
 | YCSB-B (95r/5w) | 70.3% | 75.1% | 76.1% | 77.8% |
 | YCSB-C (100r) | 70.3% | 75.1% | 76.1% | 77.7% |
 | YCSB-D (read-latest) | **72.0%** | 74.8% | 67.1% | 70.3% |
 | YCSB-F (RMW) | 70.3% | 75.2% | 75.6% | 77.8% |
-| Scan (10%) | 60.7% | 66.7% | **68.0%** | 69.5% |
+| Scan (10%) | 60.7% | 66.7% | 68.0% | **69.5%** |
 | Uniform | 8.2% | 8.1% | 8.2% | 12.3% |
 
-Equal-capacity check (YCSB-B): WALDE (8192 L1 + 4096 L2) = 77.8% vs W-TinyLFU (12288) = 78.0%. L2 tiering does not outperform equivalent single-tier capacity.
+Run-to-run variance (YCSB-B, 3 seeds): LRU 70.40% ± 0.08%, W-TinyLFU 75.28% ± 0.14%, WALDE 77.86% ± 0.08%.
 
-### Throughput
+Equal-capacity check: WALDE (8192 L1 + 4096 L2 = 12288 total) = 77.8% vs W-TinyLFU (12288) = 78.0%. L2 tiering does not outperform equivalent single-tier capacity at this working-set ratio.
 
-WALDE trades ~3× single-thread throughput for frequency-stable eviction.
+### Throughput — YCSB-B, 3-run mean ± std (cache=8192)
 
 | Policy | Throughput | p50 | p95 | p99 | Memory |
 |---|---|---|---|---|---|
-| LRU | **4.05M ± 25K/s** | 0.15 μs | 0.60 μs | 0.60 μs | 1,056 KB |
-| W-TinyLFU | 3.09M ± 45K/s | 0.30 μs | 0.60 μs | 0.60 μs | 1,192 KB |
-| WALDE | 1.41M ± 29K/s | 0.30 μs | 2.40 μs | 2.40 μs | 2,200 KB |
+| LRU | **4.19M ± 77K/s** | 0.15 μs | 0.60 μs | 0.60 μs | 1,056 KB |
+| W-TinyLFU | 3.31M ± 16K/s | 0.30 μs | 0.60 μs | 0.60 μs | 1,192 KB |
+| WALDE | 1.49M ± 22K/s | 0.30 μs | 2.40 μs | 2.40 μs | 2,200 KB |
 
-Overhead breakdown (YCSB-B, single-thread, estimated): CMS increment ~27%, `unordered_map` lookup ~18%, instrumentation ~13%, backend lookup ~11%, `std::string` copy ~9%, L2 lookup ~6%.
+### Concurrency Scaling — YCSB-B (cache=8192)
 
-### Concurrency Scaling
-
-Lock striping scales; shared slab allocator becomes dominant bottleneck at ≥8 threads.
+Slab contention is the dominant factor at small cache/working-set ratios. StripedLRU (no shared slab) is the control.
 
 | Threads | LRU | StripedLRU | W-TinyLFU | WALDE |
 |---|---|---|---|---|
-| 1 | 1.94M/s | 2.02M/s | 1.82M/s | 1.47M/s |
-| 2 | 1.08M/s | 2.50M/s | 918K/s | 1.87M/s |
-| 4 | 976K/s | 3.81M/s | 908K/s | 2.51M/s |
-| 8 | 627K/s | **4.41M/s** | 462K/s | 1.29M/s |
+| 1 | 2.22M/s | 2.19M/s | 2.00M/s | 1.52M/s |
+| 2 | 1.07M/s | 2.51M/s | 965K/s | 1.99M/s |
+| 4 | 982K/s | **3.93M/s** | 934K/s | **2.67M/s** |
+| 8 | 692K/s | 3.54M/s | 659K/s | 1.96M/s |
 
-Single-mutex LRU and W-TinyLFU collapse under contention (LRU −68%, W-TinyLFU −75% by 8T) — a locking problem, not a policy problem. WALDE's 4T→8T regression is the slab allocator.
+WALDE 4T→8T: −27%. StripedLRU 4T→8T: −10%. The gap is the shared slab.
 
-### Admission Gate Behavior
+At larger cache size (cache=65536, 65.5% fill), eviction is rarer and the slab bottleneck largely disappears:
 
-Removing Bloom increases admission rate 3–4× without improving hit rate proportionally.
+| Threads | LRU | StripedLRU | W-TinyLFU | WALDE |
+|---|---|---|---|---|
+| 1 | 3.83M/s | 3.66M/s | 3.19M/s | 2.99M/s |
+| 2 | 2.76M/s | 5.11M/s | 2.15M/s | 4.07M/s |
+| 4 | 2.31M/s | 7.59M/s | 1.90M/s | 5.94M/s |
+| 8 | 1.67M/s | **9.36M/s** | 1.43M/s | **5.84M/s** |
+
+WALDE 4T→8T at cache=65536: −2% (vs −27% at cache=8192). The slab bottleneck is eviction-rate driven, not inherent to thread count.
+
+### Admission Gate Behavior (cache=8192)
 
 | Workload | WALDE admit | WALDE reject | W-TinyLFU admit | WALDE evictions |
 |---|---|---|---|---|
 | YCSB-A | 12.7% | 87.3% | 3.2% | 15,316 |
 | YCSB-B | 7.9% | 92.1% | 3.2% | 9,438 |
+| YCSB-C | 7.4% | 92.6% | 3.2% | 8,867 |
+| YCSB-D | 15.4% | 84.6% | **23.7%** | 27,863 |
+| YCSB-F | 19.1% | 80.9% | 13.5% | 23,287 |
 | Scan (10%) | 8.6% | 91.4% | 2.8% | 9,247 |
 | Uniform | 6.1% | 93.9% | 3.7% | 27,767 |
-
-**Summary:** WALDE improves hit rate under skew and scan pressure, but shifts the system bottleneck from eviction policy to memory allocation and contention.
 
 ---
 
 ## Explicit Tradeoffs
 
-- **Higher admission rate (3–4× vs W-TinyLFU)** increases eviction churn and L2 pressure. One-hit-wonder defense is decay-only.
-- **Shared slab allocator introduces cross-stripe CAS contention**, limiting scaling beyond 4 threads (2.51M → 1.29M/s at 4T→8T).
-- **Recency-biased workloads penalized by admission gate:** new keys can't build frequency fast enough; −4.9pp vs LRU on YCSB-D.
+- **Higher admission rate (2–4× vs W-TinyLFU on skewed reads)** increases eviction churn and L2 pressure. One-hit-wonder defense is decay-only.
+- **Shared slab allocator introduces cross-stripe CAS contention**, with severity proportional to eviction rate (i.e., cache/working-set ratio).
+- **Recency-biased workloads penalized by admission gate:** −1.7pp vs LRU on YCSB-D overall (−4.9pp L1-only).
 - **L2 uses `std::list`:** per-node heap allocation, poor cache locality. Not addressed.
+- **At equal total capacity (12288), W-TinyLFU narrowly beats WALDE** (78.0% vs 77.8% YCSB-B).
 
 ---
 
@@ -245,14 +254,16 @@ Removing Bloom increases admission rate 3–4× without improving hit rate propo
 
 - Admission policies shift bottlenecks rather than eliminate them — removing Bloom moved the constraint to memory allocation.
 - Bloom filtering is not required for scan resistance — CMS alone is sufficient under skewed access.
-- At ≥8 threads, allocator contention dominates policy cost — eviction strategy becomes secondary.
-- Real traces invalidate assumptions from synthetic benchmarks: L2 rescue value was marginal on YCSB but critical on ARC S3.
+- The slab CAS bottleneck is eviction-rate driven, not a fixed thread-count cliff: at 65.5% fill, WALDE scales near-linearly to 8 threads.
+- Real traces invalidate assumptions from synthetic benchmarks: L2 rescue contributed ~45% of hits on ARC S3, but only ~2% on YCSB (8.2% fill).
+- Doorkeeper trade-offs are workload-dependent: YCSB-D shows W-TinyLFU admitting *more* than WALDE (23.7% vs 15.4%) — the Bloom filter passes recency-fresh keys that hit-only CMS rejects.
 
 ---
 
 ## Future Work
 
-- Per-stripe memory arenas with thread-local bump allocators to eliminate slab CAS contention at 8+ threads.
+- Per-stripe memory arenas with thread-local bump allocators to eliminate slab CAS contention at high eviction rates.
+- Wire `LatencyBreakdown` instrumentation into the multi-threaded concurrency-scaling benchmark to directly observe `slab_ns` degradation at 8T (currently captured only on single-threaded runs).
 - Optional Bloom doorkeeper as a compile-time flag to evaluate one-hit-wonder defense in isolation.
 - Tune Window/Probation/Protected ratios against WALDE's hit-only CMS policy; current ratios inherit Caffeine defaults.
 - Extend trace validation to Twitter cache, Wikimedia CDN, and OLTP datasets.
@@ -267,12 +278,18 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure   # 99 tests
 
+# YCSB benchmark (3-run variance)
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DWALDE_BUILD_COMPARISON=ON
 cmake --build build -j$(nproc)
 ./build/walde_comparison --runs 3
+
+# ARC S3 trace benchmark
+cd traces && bash download.sh && cd ..
+./build/walde_comparison --trace traces/s3_arc.txt --cache-size 65536
 ```
 
-All YCSB results: `walde_comparison --runs 3` on hardware above. Pre-generated sequences shared across all policies; seeds `42 + run × 7919`; warmup excluded via counter deltas.
+All YCSB results: `walde_comparison --runs 3` with seeds `42 + run × 7919`; warmup excluded via counter deltas.
+ARC S3 results: 2M ops capped from 16.4M-op trace, 1.062M unique keys, cache=65,536.
 
 ---
 
